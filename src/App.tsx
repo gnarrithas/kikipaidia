@@ -150,8 +150,8 @@ function applyReveals(article: HTMLElement, game: Game, tokens: Token[], reveals
     el.classList.add('on');
     // Shown in play (a step or hint), not just at the end: tinted.
     if (isShown({ ...game, feedback: null }, tokens, k)) el.classList.add('revealed');
-    if (game.hints.includes(k)) el.classList.add('hinted');
-    if (isFound(game, tokens, k)) el.classList.add('found');
+    // Title words found by a partial guess look like hinted ones.
+    if (game.hints.includes(k) || isFound(game, tokens, k)) el.classList.add('hinted');
     if (over && tokens[k].step === NEVER) el.classList.add('title-word');
   }
   const level = pictureLevel(game);
