@@ -59,6 +59,11 @@
 .article g-w.revealed { background: #eef3e4; border-radius: 2px; }
 .article g-w.hinted { background: #fff1b8; border-radius: 2px; }
 .article g-w.title-word { background: #d7e5ff; border-radius: 2px; }
+/* Title words a partial guess found: in play, so they stand out, and flash as they appear. */
+.article g-w.found {
+  background: #b9d3ff; box-shadow: 0 0 0 2px #36c; border-radius: 2px; animation: found-flash 1.2s ease-out 2;
+}
+@keyframes found-flash { 0%, 100% { background: #b9d3ff; } 40% { background: #ffe58a; } }
 .article.hinting g-w:not(.on) { cursor: pointer; border-radius: 2px; }
 .article.hinting g-w:not(.on):hover { background: #ffe58a; }
 .article.hinting a { cursor: default; }

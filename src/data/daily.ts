@@ -47,8 +47,6 @@ export interface Daily {
   ids: string[];
   /** Today's index into ids. */
   day: number;
-  /** Every article title, sorted: the guesses on offer. */
-  titles: string[];
   puzzle: Puzzle;
 }
 
@@ -82,12 +80,11 @@ export async function loadPuzzle(id: string): Promise<Puzzle> {
   };
 }
 
-/** The published days, the guess list and today's puzzle. */
+/** The published days and today's puzzle. */
 export async function loadDaily(): Promise<Daily> {
-  const [ids, titles] = await Promise.all([fetchText('daily.txt'), fetchText('titles.txt')].map((p) => p.then(lines)));
+  const ids = lines(await fetchText('daily.txt'));
   // Also rejects an HTML page served in place of a missing file.
   if (ids.length === 0 || !ids.every((id) => ID.test(id))) throw new Error('daily.txt is empty or malformed');
-  if (titles.length === 0) throw new Error('titles.txt is empty');
   const day = dayIndex(ids.length);
-  return { ids, day, titles, puzzle: await loadPuzzle(ids[day]) };
+  return { ids, day, puzzle: await loadPuzzle(ids[day]) };
 }

@@ -1,12 +1,12 @@
 import {
-  useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type Ref,
+  useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
 import '@fontsource/fredoka/700.css';
 import { loadPuzzle, type Daily, type Puzzle } from './data/daily';
 import {
-  HINTS, NEVER, STEP_NAMES, STEPS, canHint, stepsOf, guessCount, isOver, isShown, loadDailyGame, markOf, newGame, PICTURE_STEPS, pictureLevel,
-  play, saveDailyGame, searchTitles, type Game, type Move, type Token,
+  HINTS, NEVER, STEP_NAMES, STEPS, canHint, stepsOf, guessCount, isFound, isOver, isShown, loadDailyGame, markOf, newGame, normalizeTitle,
+  PICTURE_STEPS, partialTerms, pictureLevel, play, saveDailyGame, type Game, type Move, type Token,
 } from './game';
 import { type Mark } from './share';
 import { DEV_MODE } from './mode';
@@ -15,91 +15,27 @@ import {
 } from './settings';
 import { copyText, shareText, siteUrl } from './share';
 
-interface ComboProps<T> {
-  matches: T[];
-  query: string;
-  onQuery: (q: string) => void;
-  onPick: (item: T) => void;
-  keyOf: (item: T) => string;
-  render: (item: T) => ReactNode;
-  placeholder: string;
-  ariaLabel: string;
-  onSubmit?: () => void;
-  inputRef?: Ref<HTMLInputElement>;
-  disabled?: boolean;
-}
-
-function Combo<T>({
-  matches, query, onQuery, onPick, keyOf, render, placeholder, ariaLabel, onSubmit, inputRef, disabled,
-}: ComboProps<T>) {
-  const [open, setOpen] = useState(false);
-  const [active, setActive] = useState(0);
-
-  const pick = (item: T) => {
-    setOpen(false);
-    onPick(item);
-  };
-
-  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !(open && matches.length) && onSubmit) {
-      e.preventDefault();
-      onSubmit();
-      return;
-    }
-    if (!matches.length) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setOpen(true);
-      setActive((i) => (i + 1) % matches.length);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setActive((i) => (i - 1 + matches.length) % matches.length);
-    } else if (e.key === 'Enter' && open) {
-      e.preventDefault();
-      pick(matches[Math.min(active, matches.length - 1)]);
-    } else if (e.key === 'Escape') {
-      setOpen(false);
-    }
-  };
-
+/** The guess box: whatever is typed, submitted with Enter. */
+function GuessInput({ query, onQuery, onSubmit, disabled }: {
+  query: string; onQuery: (q: string) => void; onSubmit: () => void; disabled?: boolean;
+}) {
   return (
-    <div className="combo">
+    <form className="combo" onSubmit={(e) => { e.preventDefault(); onSubmit(); }}>
       <svg className="search-icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
         <path fill="currentColor" d="M12.2 13.6a7 7 0 111.4-1.4l5.4 5.4-1.4 1.4zM3 8a5 5 0 1010 0A5 5 0 003 8" />
       </svg>
       <input
         disabled={disabled}
-        ref={inputRef}
         value={query}
-        onChange={(e) => { onQuery(e.target.value); setActive(0); setOpen(true); }}
-        onKeyDown={onKeyDown}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
-        placeholder={placeholder}
+        onChange={(e) => onQuery(e.target.value)}
+        placeholder="Type the article title, or part of it"
         autoFocus={!disabled}
         spellCheck={false}
-        role="combobox"
-        aria-expanded={open && matches.length > 0}
-        aria-controls="guess-options"
-        aria-label={ariaLabel}
+        autoComplete="off"
+        enterKeyHint="send"
+        aria-label="Your guess"
       />
-      {open && matches.length > 0 && (
-        <ul id="guess-options" className="options" role="listbox">
-          {matches.map((item, i) => (
-            <li
-              key={keyOf(item)}
-              role="option"
-              aria-selected={i === active}
-              className={i === active ? 'active' : undefined}
-              onMouseEnter={() => setActive(i)}
-              onMouseDown={(e) => { e.preventDefault(); pick(item); }}
-            >
-              {render(item)}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    </form>
   );
 }
 
@@ -215,6 +151,7 @@ function applyReveals(article: HTMLElement, game: Game, tokens: Token[], reveals
     // Shown in play (a step or hint), not just at the end: tinted.
     if (isShown({ ...game, feedback: null }, tokens, k)) el.classList.add('revealed');
     if (game.hints.includes(k)) el.classList.add('hinted');
+    if (isFound(game, tokens, k)) el.classList.add('found');
     if (over && tokens[k].step === NEVER) el.classList.add('title-word');
   }
   const level = pictureLevel(game);
@@ -264,10 +201,6 @@ export default function App({ daily }: { daily: Daily }) {
   const [loadError, setLoadError] = useState(false);
   const [query, setQuery] = useState('');
 
-  const matches = useMemo(
-    () => searchTitles(query, daily.titles).filter((t) => !wrong.includes(t)),
-    [query, daily.titles, wrong],
-  );
   const done = isOver(game);
   const steps = useMemo(() => stepsOf(puzzle), [puzzle]);
   const attempts = guessCount(game);
@@ -311,9 +244,18 @@ export default function App({ daily }: { daily: Daily }) {
     }
   };
 
-  const guess = (title: string) => {
-    setQuery('');
-    move({ kind: 'guess', title });
+  const guess = () => {
+    const title = query.trim();
+    if (!normalizeTitle(title)) return;
+    if (move({ kind: 'guess', title })) {
+      setQuery('');
+      // The words found show in the title, at the top of the article.
+      if (partialTerms(title, puzzle.answer)) window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      setNotice(partialTerms(title, puzzle.answer)
+        ? `You already found ${title.includes(' ') ? 'those words' : 'that word'} of the title. Try the full title.`
+        : `You already guessed “${title}”.`);
+    }
   };
 
   const shareable = isDaily || DEV_MODE;
@@ -370,6 +312,11 @@ export default function App({ daily }: { daily: Daily }) {
     </span>
   ) : feedback?.kind === 'revealed' ? (
     <span>The answer is {answerLink}.</span>
+  ) : feedback?.kind === 'partial' ? (
+    <span className="partial">
+      Yes! <strong>{feedback.title}</strong> is part of the title — now shown at the top of the article.
+      {' '}Can you finish it? Type the full title.
+    </span>
   ) : feedback?.kind === 'wrong' ? (
     <span className="bad">
       It is not <strong>{feedback.title}</strong>.
@@ -378,7 +325,7 @@ export default function App({ daily }: { daily: Daily }) {
   ) : feedback?.kind === 'skipped' ? (
     <>Now revealed: {STEP_NAMES[game.step - 1].toLowerCase()}.</>
   ) : (
-    <>Recover the original article. Type the title in the search box.</>
+    <>Recover the original article. Type its title, or any part of it, and press Enter.</>
   );
 
   return (
@@ -397,17 +344,7 @@ export default function App({ daily }: { daily: Daily }) {
             <span>{status}</span>
           </div>
           <div className="search-row">
-            <Combo
-              matches={done ? [] : matches}
-              query={query}
-              onQuery={setQuery}
-              onPick={guess}
-              keyOf={(t) => t}
-              render={(t) => t}
-              placeholder="Type an article title"
-              ariaLabel="Your guess"
-              disabled={done}
-            />
+            <GuessInput query={query} onQuery={(q) => { setQuery(q); setNotice(null); }} onSubmit={guess} disabled={done} />
             {done && (
               <span className="actions">
                 {shareable && <button className="primary" onClick={share} autoFocus>{shareLabel}</button>}

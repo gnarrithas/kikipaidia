@@ -4,6 +4,7 @@ import { GAME_NAME } from './mode';
 export const MARKS = {
   wrong: '🟧',
   right: '🟦',
+  partial: '🧩',
   skipped: '⏭️',
   gaveUp: '🏳️',
 } as const;

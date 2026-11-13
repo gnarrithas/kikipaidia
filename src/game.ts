@@ -54,6 +54,8 @@ export type Move =
 
 export type Feedback =
   | { kind: 'wrong'; title: string }
+  /** The guess is part of the title: terms newly found. */
+  | { kind: 'partial'; title: string; terms: string[] }
   | { kind: 'skipped' }
   | { kind: 'correct' }
   | { kind: 'revealed' }
@@ -68,9 +70,11 @@ export interface Game {
   step: number;
   /** Tokens revealed by hints, in order. */
   hints: number[];
+  /** Title terms (see term) found by partial guesses, in order. */
+  found: string[];
 }
 
-export const newGame = (): Game => ({ moves: [], feedback: null, wrong: [], step: 0, hints: [] });
+export const newGame = (): Game => ({ moves: [], feedback: null, wrong: [], step: 0, hints: [], found: [] });
 
 export const isOver = (game: Game) => game.feedback?.kind === 'correct' || game.feedback?.kind === 'revealed';
 
@@ -85,9 +89,40 @@ export const normalizeTitle = (title: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 
+// puzzle.py's STOPWORDS: title words the article shows anyway, so they don't make a guess partial.
+const STOPWORDS = new Set(`a an the and or nor but of in on at to for from by with without over under into onto upon
+about above across after against along among around as before behind below beneath beside
+between beyond during except inside near off out outside since than through throughout till
+toward towards until up via within is are was were be it its this that de la le les du des
+del der den die das von van y et el`.split(/\s+/));
+
+/** A word as compared with the title's, like puzzle.py's term: case, accents and a possessive 's don't matter. */
+export const term = (word: string) =>
+  word.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/['’]s$/u, '');
+
+/** The terms of a text, stopwords left out. */
+const termsOf = (text: string) =>
+  text.split(/[^\p{L}\p{N}'’]+/u).map((w) => term(w.replace(/^['’]+|['’]+$/gu, '')))
+    .filter((t) => t && !STOPWORDS.has(t));
+
+/**
+ * The terms of a guess that is part of the answer (every word of it, stopwords aside, is one of the title's);
+ * null for any other guess.
+ */
+export function partialTerms(guess: string, answer: string): string[] | null {
+  const terms = [...new Set(termsOf(guess))];
+  const title = new Set(termsOf(answer));
+  return terms.length > 0 && terms.every((t) => title.has(t)) ? terms : null;
+}
+
 /** Whether token k shows its real text: its step is reached, a hint revealed it, or the game is over. */
 export const isShown = (game: Game, tokens: Token[], k: number) =>
-  isOver(game) || game.hints.includes(k) || (tokens[k] !== undefined && tokens[k].step > HINT_ONLY && tokens[k].step <= game.step);
+  isOver(game) || game.hints.includes(k) || (tokens[k] !== undefined && (
+    (tokens[k].step > HINT_ONLY && tokens[k].step <= game.step) || isFound(game, tokens, k)));
+
+/** Whether token k is a title word a partial guess found. */
+export const isFound = (game: Game, tokens: Token[], k: number) =>
+  tokens[k] !== undefined && tokens[k].step === NEVER && game.found.includes(term(tokens[k].text));
 
 /** Whether a hint may reveal token k now (title words never). */
 export const canHint = (game: Game, tokens: Token[], k: number) =>
@@ -95,7 +130,10 @@ export const canHint = (game: Game, tokens: Token[], k: number) =>
 
 const nextStep = (game: Game, rules: Rules) => stepsOf(rules).find((s) => s > game.step) ?? STEPS;
 
-/** The game after one more move; null for a move that can't be made (game over, repeated guess, no hint left...). */
+/**
+ * The game after one more move; null for a move that can't be made (game over, repeated guess, a part of the
+ * title already found, no hint left...). A guess that is part of the title costs nothing: it shows those words.
+ */
 export function play(game: Game, move: Move, rules: Rules): Game | null {
   if (isOver(game)) return null;
   const moves = [...game.moves, move];
@@ -112,6 +150,12 @@ export function play(game: Game, move: Move, rules: Rules): Game | null {
       const guess = normalizeTitle(move.title);
       if (!guess || game.wrong.some((t) => normalizeTitle(t) === guess)) return null;
       if (guess === normalizeTitle(rules.answer)) return { ...game, moves, feedback: { kind: 'correct' } };
+      const partial = partialTerms(move.title, rules.answer);
+      if (partial) {
+        const terms = partial.filter((t) => !game.found.includes(t));
+        if (!terms.length) return null;
+        return { ...game, moves, found: [...game.found, ...terms], feedback: { kind: 'partial', title: move.title, terms } };
+      }
       return {
         ...game, moves, step: nextStep(game, rules), wrong: [...game.wrong, move.title],
         feedback: { kind: 'wrong', title: move.title },
@@ -130,20 +174,9 @@ export function markOf(move: Move, answer: string): Mark | null {
     case 'hint':
       return null;
     case 'guess':
-      return normalizeTitle(move.title) === normalizeTitle(answer) ? MARKS.right : MARKS.wrong;
+      if (normalizeTitle(move.title) === normalizeTitle(answer)) return MARKS.right;
+      return partialTerms(move.title, answer) ? MARKS.partial : MARKS.wrong;
   }
-}
-
-/** Titles containing every word typed, those starting with the query first. */
-export function searchTitles(query: string, titles: string[], limit = 50): string[] {
-  const q = normalizeTitle(query);
-  if (!q) return [];
-  const words = q.split(' ');
-  const scored = titles
-    .map((title) => ({ title, norm: normalizeTitle(title) }))
-    .filter(({ norm }) => words.every((w) => norm.includes(w)));
-  scored.sort((a, b) => Number(!a.norm.startsWith(q)) - Number(!b.norm.startsWith(q)) || a.norm.localeCompare(b.norm));
-  return scored.slice(0, limit).map(({ title }) => title);
 }
 
 // One saved game at a time: today's. Another day's or another puzzle's (a new deploy) is ignored.
