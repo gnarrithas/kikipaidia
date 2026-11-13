@@ -1,0 +1,218 @@
+:root {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light;
+  --text: #1d2330;
+  --muted: #555;
+  --faint: #777;
+  --page: #fff;
+  --card: rgba(255, 255, 255, 0.96);
+  --surface: #fff;
+  --hover: #f2f4f7;
+  --active: #e8effd;
+  --border: #c8cdd6;
+  --rule: #e3e6eb;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #bfd0f5;
+  --good: #1f8a4c;
+  --bad: #d64545;
+  --shadow: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  background: var(--page);
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --text: #e5e7eb;
+  --muted: #a3a9b5;
+  --faint: #8b919c;
+  --page: #11141b;
+  --card: rgba(24, 28, 37, 0.96);
+  --surface: #1f2430;
+  --hover: #2a3140;
+  --active: #26354f;
+  --border: #3b4252;
+  --rule: #343b49;
+  --accent: #60a5fa;
+  --accent-hover: #93c5fd;
+  --accent-soft: #34507a;
+  --good: #4ade80;
+  --bad: #f87171;
+  --shadow: rgba(0, 0, 0, 0.5);
+}
+body { margin: 0; }
+.load-error { margin: 32px; text-align: center; }
+
+/*
+ * Wikipedia's (Vector 2022) layout: a header with the logo, the search box (the guess) and the user links;
+ * a notice line; then the contents column on the left (the game's controls) beside the article.
+ */
+.wiki { max-width: 1440px; margin: 0 auto; padding: 0 24px 48px; font-size: 1rem; }
+/* Appearance: the article's text size, and the page's width. */
+.wiki.width-wide { max-width: none; }
+.wiki.text-small { --article-text: 0.875rem; }
+.wiki.text-standard { --article-text: 1rem; }
+.wiki.text-large { --article-text: 1.25rem; }
+/* Header and notice stay in view while the article scrolls. */
+.top {
+  position: sticky; top: 0; z-index: 5; background: var(--page);
+  border-bottom: 1px solid var(--rule); margin-bottom: 16px;
+}
+.site-header {
+  /* The user links sit on the status line's baseline, above the search box; the logo stays centred. */
+  display: flex; align-items: baseline; gap: 24px; min-height: 56px; padding: 8px 0;
+  background: var(--page);
+}
+.logo { align-self: center; display: flex; align-items: center; flex: none; width: 15.5rem; user-select: none; }
+.wordmark { display: flex; flex-direction: column; align-items: center; }
+/* An encyclopedia's serif wordmark: small capitals, the first and last letters full size. */
+.brand {
+  font-family: 'Linux Libertine', 'Hoefler Text', Georgia, 'Times New Roman', serif; font-weight: normal;
+  font-size: 1.6rem; line-height: 1; letter-spacing: 0.02em; color: #000;
+}
+/* Dark theme: the same wordmark in white. */
+:root[data-theme='dark'] .brand { color: #fff; }
+.brand-mid { font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.04em; }
+.tagline { margin-top: 3px; font-family: 'Linux Libertine', 'Hoefler Text', Georgia, serif; font-size: 0.8rem; color: var(--text); }
+/* The column runs up to the user links, so the status above the box can be longer than the box. */
+.search { flex: 1; min-width: 0; }
+.user-links { display: flex; align-items: center; gap: 4px 16px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.user-link {
+  padding: 0; border: 0; border-radius: 0; background: none; color: var(--accent); font-size: 0.875rem;
+}
+.user-link:hover { background: none; text-decoration: underline; }
+/* Dev mode only. */
+.user-link.dev { color: var(--faint); border-bottom: 1px dashed var(--faint); }
+
+/* The search box: a magnifier inside a square-cornered field, suggestions dropping below. */
+.combo { position: relative; max-width: 600px; }
+.search-icon { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.combo input {
+  width: 100%; height: 34px; box-sizing: border-box; padding: 5px 8px 5px 36px;
+  font: inherit; font-size: 0.875rem; color: var(--text); background: var(--surface);
+  border: 1px solid #a2a9b1; border-radius: 2px;
+}
+.combo input:focus { outline: none; border-color: #36c; box-shadow: inset 0 0 0 1px #36c; }
+.combo input:disabled { opacity: 0.6; }
+.options {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 1;
+  margin: 0; padding: 0; list-style: none;
+  background: var(--surface); border: 1px solid #a2a9b1; border-top: 0; box-shadow: 0 2px 2px var(--shadow);
+  max-height: 360px; overflow-y: auto;
+}
+.options li {
+  padding: 7px 12px 7px 36px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.875rem;
+}
+.options li.active { background: var(--active); }
+
+/* The game's status above the search box: the question, then feedback. */
+.site-notice {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px;
+  min-height: 24px; margin-bottom: 6px; font-size: 1rem; font-weight: 600; line-height: 1.4; color: var(--text);
+}
+/* The search box, and at the end Share / Another article to its right. */
+.search-row { display: flex; align-items: center; gap: 8px; }
+.search-row .combo { flex: 1; min-width: 0; }
+.search-row .actions { flex: none; font-size: 0.875rem; }
+.site-notice a { color: var(--accent); }
+.good { color: var(--good); font-weight: 600; }
+.bad { color: var(--bad); }
+.actions { display: inline-flex; gap: 8px; }
+button {
+  font: inherit; cursor: pointer;
+  padding: 6px 14px; border-radius: 2px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+button:hover { background: var(--hover); }
+button.primary { background: #36c; border-color: #36c; color: #fff; font-weight: 600; }
+button.primary:hover { background: #447ff5; border-color: #447ff5; }
+button:disabled { opacity: 0.5; cursor: default; }
+
+.columns { display: flex; align-items: flex-start; gap: 24px; }
+
+/* The contents column: the reveal steps as its entries, then the game's actions and wrong guesses. */
+.toc {
+  position: sticky; top: 112px; flex: none; width: 15.5rem; box-sizing: border-box;
+  max-height: calc(100vh - 128px); overflow-y: auto; font-size: 0.875rem;
+}
+.toc-title { font-weight: bold; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid #a2a9b1; }
+.toc-subtitle { font-weight: bold; margin: 18px 0 6px; padding-bottom: 6px; border-bottom: 1px solid var(--rule); }
+.toc-steps, .toc-actions { margin: 0; padding: 0; list-style: none; }
+.toc-steps li { display: flex; gap: 8px; padding: 4px 0; color: var(--faint); }
+.toc-steps li.on { color: var(--accent); }
+.toc-steps input { margin: 0; pointer-events: none; accent-color: var(--accent); }
+.toc-actions { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--rule); }
+.toc-link {
+  display: block; width: 100%; padding: 4px 0; border: 0; background: none; text-align: left;
+  color: var(--accent); font-size: 0.875rem;
+}
+.toc-link:hover { background: none; text-decoration: underline; }
+.toc-link:disabled { color: var(--faint); text-decoration: none; }
+.toc-link.pressed { font-weight: bold; }
+.wrong-list { margin: 0; padding: 0; list-style: none; }
+.wrong-list li { padding: 3px 0; color: var(--bad); text-decoration: line-through; }
+
+.page { flex: 1; min-width: 0; box-sizing: border-box; padding: 0 0 24px; }
+
+/* The pinned Appearance menu, a column on the right like Wikipedia's. */
+.appearance {
+  position: sticky; top: 112px; flex: none; width: 12.5rem; box-sizing: border-box;
+  max-height: calc(100vh - 128px); overflow-y: auto; font-size: 0.875rem;
+}
+.appearance-header {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid #a2a9b1;
+}
+.appearance-header h2 { margin: 0; }
+.appearance-title { font-weight: bold; }
+.appearance-pin {
+  padding: 2px 6px; border: 1px solid var(--border); border-radius: 2px; font-size: 0.8rem; color: var(--text);
+}
+.appearance-group { margin: 0; padding: 6px 0 10px; border: 0; }
+.appearance-group legend { padding: 0 0 4px; font-weight: bold; }
+.appearance-option { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+.appearance-option input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+/* Pinned and room for it: the column; otherwise the header link, and no column. */
+@media (min-width: 1121px) {
+  .user-link.appearance-link.pinned { display: none; }
+}
+@media (max-width: 1120px) {
+  .appearance { display: none; }
+  .popover-panel .appearance-pin { display: none; }
+}
+
+/* Narrow screens: the contents go above the article, the search under the logo. */
+@media (max-width: 900px) {
+  .wiki { padding: 0 12px 32px; }
+  /* The search drops to its own row: the logo and the links centre on the first. */
+  .site-header { flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .logo { width: auto; }
+  .search { order: 3; flex-basis: 100%; }
+  .combo { max-width: none; }
+  .columns { flex-direction: column; }
+  .toc { position: static; width: 100%; max-height: none; }
+  /* Phones: header and notice would hide too much of the article; they scroll away with it. */
+  .top { position: static; }
+}
+
+/* Open panels sit in the middle of the screen over a dimmed page. */
+.backdrop {
+  position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.popover-panel {
+  position: relative; width: min(440px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box;
+  color: var(--text);
+  padding: 24px 28px; border-radius: 14px; background: var(--surface);
+  box-shadow: 0 10px 30px var(--shadow); font-size: 0.92rem; line-height: 1.55;
+}
+.popover-panel h2 { margin: 0 0 14px; font-size: 1.15rem; }
+.popover-panel p { margin: 0 0 12px; }
+.popover-panel ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
+.popover-close {
+  position: absolute; top: 14px; right: 16px; padding: 0 6px; border: 0; background: none;
+  font-size: 1.3rem; line-height: 1; color: var(--faint);
+}
+.popover-close:hover { background: none; color: var(--text); }
+/* Room for the panel's close button. */
+.popover-panel .appearance-header { padding-right: 28px; }

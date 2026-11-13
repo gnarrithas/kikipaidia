@@ -1,0 +1,13 @@
+__pycache__/
+.ipynb_checkpoints/
+# Notebook experiments; data/pictures/ holds the committed picture pool.
+/*.png
+node_modules
+dist
+*.tsbuildinfo
+# Built by `npm run puzzles` for the dev server; deploys build their own.
+public/game/
+# Local-only experiments.
+playground.ipynb
+examine_pixelations/
+.DS_Store

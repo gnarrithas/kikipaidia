@@ -1,0 +1,80 @@
+/*
+ * Wikipedia-like look for the puzzle article (the body of a Vector 2022 page),
+ * scoped to .article. Templates' own TemplateStyles come inline with each article.
+ * The size of its text is the Appearance menu's (--article-text, src/App.css).
+ */
+.article {
+  color-scheme: light;
+  color: #202122; font-family: sans-serif; font-size: var(--article-text, 1rem); line-height: 1.6;
+  overflow-wrap: break-word;
+}
+.article::after { content: ''; display: block; clear: both; }
+.article a { color: #36c; text-decoration: none; }
+.article a:hover { text-decoration: underline; }
+.article p { margin: 0.5em 0; }
+.article h2, .article h3, .article h4 {
+  font-weight: normal; color: #000; margin: 1em 0 0.25em; overflow: hidden;
+}
+.article h2 { font-family: 'Linux Libertine', Georgia, Times, serif; font-size: 1.5em; border-bottom: 1px solid #a2a9b1; }
+.article h3 { font-size: 1.2em; font-weight: bold; }
+.article h4 { font-size: 1em; font-weight: bold; }
+.article ul, .article ol { margin: 0.3em 0 0 1.6em; padding: 0; }
+.article li { margin-bottom: 0.1em; }
+.article sup, .article sub { line-height: 1; }
+.article img { max-width: 100%; height: auto; vertical-align: middle; }
+.article .hatnote { font-style: italic; padding-left: 1.6em; margin-bottom: 0.5em; }
+
+.article .infobox {
+  float: right; clear: right; width: 22em; margin: 0.5em 0 0.5em 1em; padding: 0.2em;
+  border: 1px solid #a2a9b1; border-spacing: 3px; background: #f8f9fa; font-size: 88%; line-height: 1.5em;
+}
+.article .infobox th, .article .infobox td { vertical-align: top; text-align: left; padding: 0.2em; }
+.article .infobox-above { text-align: center !important; font-weight: bold; }
+.article .infobox-image, .article .infobox-caption { text-align: center !important; }
+.article .infobox-caption { padding-top: 0.2em; }
+
+.article figure {
+  display: table; float: right; clear: right; margin: 0.5em 0 1.3em 1.4em;
+  border: 1px solid #c8ccd1; padding: 3px; background: #f8f9fa;
+}
+.article figure.mw-halign-left { float: left; margin: 0.5em 1.4em 1.3em 0; }
+.article figure.mw-halign-center { float: none; margin: 0.5em auto; }
+.article figure > a, .article figure > span { display: block; }
+.article figcaption { display: table-caption; caption-side: bottom; padding: 6px 3px 3px; font-size: 88%; line-height: 1.4em; }
+
+.article table.wikitable {
+  margin: 1em 0; border: 1px solid #a2a9b1; border-collapse: collapse; background: #f8f9fa; color: #202122;
+}
+.article .wikitable th, .article .wikitable td { border: 1px solid #a2a9b1; padding: 0.2em 0.4em; }
+.article .wikitable th { background: #eaecf0; text-align: center; }
+
+.article .reflist, .article ol.references { font-size: 90%; }
+.article .mw-cite-backlink { margin-right: 0.3em; }
+
+@media (max-width: 720px) {
+  .article .infobox, .article figure { float: none; width: auto; margin: 0.5em auto; }
+}
+
+/* Reveals (src/App.tsx): real words come back, faintly tinted; hinted ones and, at the end, the title's stand out. */
+.article g-w.revealed { background: #eef3e4; border-radius: 2px; }
+.article g-w.hinted { background: #fff1b8; border-radius: 2px; }
+.article g-w.title-word { background: #d7e5ff; border-radius: 2px; }
+.article.hinting g-w:not(.on) { cursor: pointer; border-radius: 2px; }
+.article.hinting g-w:not(.on):hover { background: #ffe58a; }
+.article.hinting a { cursor: default; }
+/* Pixelated originals: a few pixels each, scaled up as sharp blocks. */
+.article img.on { image-rendering: pixelated; object-fit: fill !important; }
+.article img.on.full { image-rendering: auto; }
+
+/* The page title, as Wikipedia shows it above the article. */
+.article h1.firstHeading {
+  font-family: 'Linux Libertine', 'Georgia', 'Times', serif; font-size: 1.8em; font-weight: normal; line-height: 1.375;
+  color: #000; margin: 0 0 0.6em; padding-bottom: 0.1em; border-bottom: 1px solid #a2a9b1; overflow: visible;
+}
+
+/*
+ * Dark: inline template styles hardcode light colours, so the article is drawn light and inverted, hue kept,
+ * as Wikipedia's night mode does with content it can't recolour; pictures are inverted back.
+ */
+:root[data-theme='dark'] .article,
+:root[data-theme='dark'] .article img { filter: invert(1) hue-rotate(180deg); }
