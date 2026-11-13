@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pins the shuffle (a change would reorder every deployed puzzle) and checks nothing leaks."""
+"""Checks the schedule is followed up to today only and nothing leaks."""
 
 import base64
 import datetime as dt
@@ -50,34 +50,41 @@ def make_pool(folder: Path, sizes: list[tuple[int, int]]) -> list[puzzle.Picture
     return puzzle.load_pictures(folder)
 
 
-class ShuffleTest(unittest.TestCase):
-    def test_stream_is_hmac_sha256_counter_mode(self):
-        stream = b.ByteStream(b"test-seed")
+def day(n: int) -> str:
+    return (b.FIRST_DAY + dt.timedelta(days=n)).isoformat()
+
+
+class ScheduleTest(unittest.TestCase):
+    def read(self, text: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schedule.txt"
+            path.write_text(text)
+            return b.read_schedule(path)
+
+    def test_missing_file_is_empty(self):
+        self.assertEqual(b.read_schedule(Path("/nonexistent/schedule.txt")), [])
+
+    def test_reads_consecutive_days(self):
+        schedule = self.read(f"{day(0)} alpha\n\n{day(1)} bravo\n")
+        self.assertEqual(schedule, [(b.FIRST_DAY, "alpha"), (b.FIRST_DAY + dt.timedelta(days=1), "bravo")])
+
+    def test_rejects_gaps_and_malformed_lines(self):
+        for text in (f"{day(1)} alpha\n", f"{day(0)} alpha\n{day(2)} bravo\n", f"{day(0)}\n", "x alpha\n"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                self.read(text)
+
+    def test_daily_slugs_stop_at_today(self):
+        schedule = self.read(f"{day(0)} delta\n{day(1)} alpha\n{day(2)} echo\n")
+        self.assertEqual(b.daily_slugs(schedule, SLUGS, b.FIRST_DAY), ["delta"])
+        self.assertEqual(b.daily_slugs(schedule, SLUGS, b.FIRST_DAY - dt.timedelta(days=9)), [])
+        self.assertEqual(b.daily_slugs(schedule, SLUGS, b.FIRST_DAY + dt.timedelta(days=9)), ["delta", "alpha", "echo"])
+
+    def test_publish_all_appends_the_unscheduled_sorted(self):
+        schedule = self.read(f"{day(0)} delta\n")
         self.assertEqual(
-            [stream.next_u64() for _ in range(3)],
-            [11957243613851627194, 3755087740879313799, 18115887728204555026],
+            b.daily_slugs(schedule, SLUGS, b.FIRST_DAY, publish_all=True),
+            ["delta", "alpha", "bravo", "charlie", "echo", "foxtrot", "golf", "hotel"],
         )
-
-    def test_golden_order(self):
-        self.assertEqual(
-            b.shuffle(SLUGS, "test-seed"),
-            ["alpha", "foxtrot", "delta", "bravo", "golf", "echo", "hotel", "charlie"],
-        )
-
-    def test_input_order_and_duplicates_do_not_matter(self):
-        self.assertEqual(b.shuffle(list(reversed(SLUGS)) + ["echo"], "test-seed"), b.shuffle(SLUGS, "test-seed"))
-
-    def test_empty_seed_is_refused(self):
-        with self.assertRaises(ValueError):
-            b.shuffle(SLUGS, "")
-
-    def test_daily_slugs_stop_at_today_and_wrap(self):
-        order = b.shuffle(SLUGS, "test-seed")
-        first = b.FIRST_DAY
-        self.assertEqual(b.daily_slugs(SLUGS, "test-seed", first), order[:1])
-        self.assertEqual(b.daily_slugs(SLUGS, "test-seed", first - dt.timedelta(days=9)), order[:1])
-        self.assertEqual(b.daily_slugs(SLUGS, "test-seed", first + dt.timedelta(days=9)), order + order[:2])
-        self.assertEqual(b.daily_slugs(SLUGS, "test-seed", first, publish_all=True), order)
 
     def test_ids_depend_on_the_seed_and_hide_the_slug(self):
         self.assertNotEqual(b.puzzle_id("a", "gabon"), b.puzzle_id("b", "gabon"))
@@ -269,12 +276,16 @@ class MainTest(unittest.TestCase):
     def setUp(self):
         self.words_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.words_dir.cleanup)
+        self.schedule = Path(self.words_dir.name) / "schedule.txt"
+        self.schedule.write_text(f"{day(0)} placeholder_gamma\n{day(1)} placeholder_alpha\n{day(2)} placeholder_beta\n")
 
     def run_main(self, out: Path, seed: str, *extra: str) -> int:
-        today = (b.FIRST_DAY + dt.timedelta(days=1)).isoformat()
         words = Path(self.words_dir.name) / "words.txt"
         words.write_text("\n".join(WORDS))
-        args = [str(ARTICLES), str(out), "--pictures", str(PICTURES), "--words", str(words), "--today", today, *extra]
+        args = [
+            str(ARTICLES), str(out), "--pictures", str(PICTURES), "--words", str(words),
+            "--schedule", str(self.schedule), "--today", day(1), *extra,
+        ]
         with mock.patch.dict(os.environ, {b.SEED_ENV: seed}):
             return b.main(args)
 
@@ -300,6 +311,21 @@ class MainTest(unittest.TestCase):
             served = {p.name for p in out.glob("pictures/*")}
             referenced = set(re.findall(r"game/pictures/([^\"]+)", data["html"]))
             self.assertTrue(referenced and referenced <= served)
+
+    def test_follows_the_schedule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            self.run_main(out, "test-seed")
+            self.assertEqual(
+                out.joinpath("daily.txt").read_text().split(),
+                [b.puzzle_id("test-seed", "placeholder_gamma"), b.puzzle_id("test-seed", "placeholder_alpha")],
+            )
+
+    def test_fails_on_an_undownloaded_or_empty_schedule(self):
+        for text in (f"{day(0)} placeholder_zulu\n", ""):
+            self.schedule.write_text(text)
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as tmp, self.assertLogs(b.log, "ERROR"):
+                self.assertEqual(self.run_main(Path(tmp), "test-seed"), 1)
 
     def test_same_seed_same_puzzles(self):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as c:

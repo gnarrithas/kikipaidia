@@ -3,11 +3,12 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
-  # Daily redeploy publishing the new UTC day's article (scripts/build_puzzles.py
-  # writes days up to today, UTC, never tomorrow). Players east of UTC keep
-  # yesterday's article until it lands, so it runs just after midnight with a
-  # retry an hour later. Schedules run from the default branch, and GitHub
-  # disables them after 60 days without commits in a public repo.
+  # Daily: schedule (and download) the new UTC day's article, commit it, and
+  # redeploy (scripts/build_puzzles.py writes days up to today, UTC, never
+  # tomorrow). Players east of UTC keep yesterday's article until it lands, so
+  # it runs just after midnight with a retry an hour later (a no-op once the
+  # day is scheduled). Schedules run from the default branch; the daily commit
+  # keeps GitHub from disabling them after 60 days without commits.
   schedule:
     - cron: "7 0 * * *"
     - cron: "7 1 * * *"
@@ -20,11 +21,14 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  # Never cancel a run between its schedule commit and its deploy.
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # the daily schedule commit
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,6 +38,21 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: npm ci
       - run: uv run --locked --no-dev python -m unittest discover -s scripts
+      # Appends every unscheduled day up to today to data/schedule.txt,
+      # downloading the picks into data/articles/, then commits them.
+      - run: uv run --locked --no-dev scripts/schedule_articles.py
+        env:
+          SOLUTIONS_SHUFFLE_SEED: ${{ secrets.SOLUTIONS_SHUFFLE_SEED }}
+      - name: Commit the schedule
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git add data/schedule.txt data/articles
+          if ! git diff --cached --quiet; then
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898283+github-actions[bot]@users.noreply.github.com" \
+                commit -m "Schedule articles up to $(date -u +%F)"
+            git push
+          fi
       - run: npm run build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Write the published puzzles: the shuffled articles, scrambled, up to today only.
+"""Write the published puzzles: the scheduled articles, scrambled, up to today only.
 
-Deploys run this daily after the build. It reads the downloaded article pages
-(<slug>.html, and their pictures in <slug>.images/, pixelated and unpixelated,
-from scripts/download_from_wikipedia.py), shuffles them with the secret seed, and
-writes into OUTPUT:
+Deploys run this daily after scripts/schedule_articles.py. It reads the schedule
+(data/schedule.txt, line N "<date> <slug>" for day N) and the downloaded article
+pages (<slug>.html, and their pictures in <slug>.images/, pixelated and
+unpixelated, from scripts/download_from_wikipedia.py), and writes into OUTPUT:
   daily.txt          line N is day N's puzzle id, day 0 being FIRST_DAY
   puzzles/<id>.json  {"answer": base64 of the title, "html": the scrambled body,
                       "tokens": base64 of [[reveal step, original text], ...] by <g-w k>,
@@ -14,14 +14,11 @@ writes into OUTPUT:
                                  is over), [] if none}
   pictures/<name>    the pictures those puzzles show, named by content hash
   titles.txt         every article's title, sorted: the guesses the game offers
-Days stop at today (UTC), so tomorrow's puzzle is never published; --all
-publishes every article (development). Puzzle ids and each puzzle's random
-words, numbers and pictures come from HMAC-SHA256 of the seed and the slug, so
-ids can't be guessed and a puzzle is the same in every deploy.
-
-The shuffle uses HMAC-SHA256 in counter mode and an exact rejection sampler,
-never Python's `random` module, so it gives the same order on any Python
-version. The scrambling does use `random` (seeded), as textplay does.
+Days stop at today (UTC), so a later scheduled day is never published; --all
+also publishes every unscheduled article after them (development). Puzzle ids
+and each puzzle's random words, numbers and pictures come from HMAC-SHA256 of
+the seed and the slug, so ids can't be guessed and a puzzle is the same in
+every deploy. The scrambling uses `random` (seeded), as textplay does.
 """
 
 import argparse
@@ -60,56 +57,35 @@ DEFAULT_WINDOW = 32
 log = logging.getLogger("build_puzzles")
 
 
-class ByteStream:
-    """Deterministic 64-bit integers: HMAC-SHA256(seed, counter) blocks."""
-
-    def __init__(self, seed: bytes):
-        self._seed = seed
-        self._counter = 0
-        self._buffer = b""
-
-    def next_u64(self) -> int:
-        if len(self._buffer) < 8:
-            block = hmac.new(
-                self._seed, self._counter.to_bytes(8, "big"), hashlib.sha256
-            ).digest()
-            self._counter += 1
-            self._buffer += block
-        value, self._buffer = self._buffer[:8], self._buffer[8:]
-        return int.from_bytes(value, "big")
-
-    def below(self, n: int) -> int:
-        """Uniform integer in [0, n), without modulo bias."""
-        if n <= 0:
-            raise ValueError(f"n must be positive, got {n}")
-        limit = (1 << 64) - ((1 << 64) % n)
-        while True:
-            value = self.next_u64()
-            if value < limit:
-                return value % n
-
-
-def shuffle(slugs, seed: str) -> list[str]:
-    """Fisher-Yates shuffle of the sorted, deduplicated slugs, driven by the seed."""
-    if not seed:
-        raise ValueError("the seed is empty")
-    order = sorted(set(slugs))
-    stream = ByteStream(seed.encode("utf-8"))
-    for i in range(len(order) - 1, 0, -1):
-        j = stream.below(i + 1)
-        order[i], order[j] = order[j], order[i]
-    return order
-
-
-def daily_slugs(slugs, seed: str, today: dt.date, publish_all: bool = False) -> list[str]:
-    """Slugs for day 0 through today (or every slug, if more); the shuffle wraps."""
-    order = shuffle(slugs, seed)
-    if not order:
+def read_schedule(path: Path) -> list[tuple[dt.date, str]]:
+    """The schedule's (date, slug) lines, day 0 first; [] if the file is missing.
+    Raises ValueError unless line N is dated FIRST_DAY + N days."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return []
-    last_day = max(0, (today - FIRST_DAY).days)
+    days: list[tuple[dt.date, str]] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        parts = raw.split()
+        expected = FIRST_DAY + dt.timedelta(days=len(days))
+        try:
+            date = dt.date.fromisoformat(parts[0]) if len(parts) == 2 else None
+        except ValueError:
+            date = None
+        if date != expected:
+            raise ValueError(f"{path}:{lineno}: expected '{expected.isoformat()} <slug>', got {raw!r}")
+        days.append((date, parts[1]))
+    return days
+
+
+def daily_slugs(schedule: list[tuple[dt.date, str]], slugs, today: dt.date, publish_all: bool = False) -> list[str]:
+    """Scheduled slugs up to today; with publish_all, every scheduled slug, then the other slugs, sorted."""
     if publish_all:
-        last_day = max(last_day, len(order) - 1)
-    return [order[day % len(order)] for day in range(last_day + 1)]
+        days = [slug for _, slug in schedule]
+        return days + sorted(set(slugs) - set(days))
+    return [slug for date, slug in schedule if date <= today]
 
 
 def _mac(seed: str, purpose: str, slug: str) -> bytes:
@@ -219,7 +195,7 @@ def pixelated_originals(images: Path, originals: list[str], output: Path) -> lis
 
 def build(
     articles: Path, output: Path, words: list[str], pictures: list[puzzle.Picture],
-    seed: str, today: dt.date, publish_all: bool,
+    seed: str, schedule: list[tuple[dt.date, str]], today: dt.date, publish_all: bool,
 ) -> int:
     """Write OUTPUT (see the module docstring); returns the number of published days."""
     pages = {path.stem: path for path in sorted(articles.glob("*.html"))}
@@ -229,7 +205,13 @@ def build(
         {puzzle.page_title(p.read_text(encoding="utf-8")) for p in pages.values()},
         key=str.casefold,
     )
-    days = daily_slugs(pages, seed, today, publish_all)
+    days = daily_slugs(schedule, pages, today, publish_all)
+    if not days:
+        raise ValueError("nothing scheduled up to today; run schedule_articles.py")
+    if missing := sorted(set(days) - set(pages)):
+        raise ValueError(f"scheduled but not downloaded: {', '.join(missing)}")
+    if not publish_all and len(days) <= (today - FIRST_DAY).days:
+        log.warning("the schedule ends before today; the game shows its last day")
 
     # Both are this script's own output; rebuilt from scratch so no stale puzzle stays published.
     for sub in ("puzzles", "pictures"):
@@ -275,8 +257,12 @@ def parse_args(argv):
         "--words", type=Path, default=ROOT / "words.txt",
         help="replacement words, one per line (default: words.txt)",
     )
+    parser.add_argument(
+        "--schedule", type=Path, default=ROOT / "data" / "schedule.txt",
+        help="day-by-day schedule (default: data/schedule.txt)",
+    )
     parser.add_argument("--today", type=parse_date, help="last UTC date to publish (default: today)")
-    parser.add_argument("--all", action="store_true", help="publish every article (development)")
+    parser.add_argument("--all", action="store_true", help="also publish every unscheduled article (development)")
     return parser.parse_args(argv)
 
 
@@ -291,12 +277,13 @@ def main(argv=None) -> int:
     try:
         words = textplay.load_words(args.words)
         pictures = puzzle.load_pictures(args.pictures)
+        schedule = read_schedule(args.schedule)
     except (OSError, ValueError) as err:
         log.error("%s", err)
         return 1
     today = args.today or dt.datetime.now(dt.timezone.utc).date()
     try:
-        days = build(args.articles, args.output, words, pictures, seed, today, args.all)
+        days = build(args.articles, args.output, words, pictures, seed, schedule, today, args.all)
     except (OSError, ValueError) as err:
         log.error("%s", err)
         return 1
