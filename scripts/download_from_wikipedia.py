@@ -21,17 +21,18 @@ where <slug> is the lowercased ASCII title with non-alphanumerics replaced by "_
 """
 
 import argparse
+import http.client
 import io
 import logging
 import re
 import sys
+import threading
 import time
 import unicodedata
-import urllib.error
-import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 # Shared modules (wikipage, pixelate) live in the repository root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -47,17 +48,22 @@ import wikipage  # noqa: E402
 logger = logging.getLogger(__name__)
 
 PAUSE_BETWEEN_ARTICLES_S = 1.0
-PAUSE_BETWEEN_IMAGES_S = 0.05
+# Pictures fetched and encoded at once; Wikimedia tolerates a few parallel requests.
+DEFAULT_WORKERS = 4
 # Wikimedia asks for a descriptive User-Agent; no personal contact details here.
-USER_AGENT = "pixelate-download-from-wikipedia/0.1 (Python urllib)"
+USER_AGENT = "pixelate-download-from-wikipedia/0.2 (Python http.client)"
 IMAGE_TIMEOUT_S = 30
-IMAGE_RETRIES = 4
+IMAGE_RETRIES = 7
+MAX_REDIRECTS = 5
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 COMPLETE = "complete"
 # Second line of COMPLETE once the folder also holds the unpixelated <key>.webp copies.
 ORIGINALS = "originals"
 # Unpixelated copies: at most this many times the displayed width (sharp on high-DPI screens).
 ORIGINAL_SCALE = 2
 ORIGINAL_QUALITY = 80
+# WebP effort, 0 (fast) to 6 (slowest, slightly smaller); 4 is Pillow's default.
+ORIGINAL_METHOD = 4
 # Map tiles are served to Wikimedia sites only (HTTP 403 for anyone else): skipped.
 RESTRICTED_HOSTS = frozenset({"maps.wikimedia.org"})
 
@@ -148,36 +154,131 @@ def _size(value: object) -> int | None:
     return number if number > 0 else None
 
 
-def fetch_image(url: str) -> Image.Image:
-    """Download and decode a picture, waiting and retrying when rate limited (HTTP 429)."""
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    for attempt in range(1, IMAGE_RETRIES + 1):
+class FetchError(OSError):
+    """A picture request that got an unusable HTTP response."""
+
+
+# Keep-alive connections, per thread and host: saves a TLS handshake per picture.
+_connections = threading.local()
+
+
+def _connection(host: str) -> http.client.HTTPSConnection:
+    pool: dict[str, http.client.HTTPSConnection] = _connections.__dict__.setdefault("pool", {})
+    if host not in pool:
+        pool[host] = http.client.HTTPSConnection(host, timeout=IMAGE_TIMEOUT_S)
+    return pool[host]
+
+
+def _drop_connection(host: str) -> None:
+    pool: dict[str, http.client.HTTPSConnection] = _connections.__dict__.get("pool", {})
+    if (conn := pool.pop(host, None)) is not None:
+        conn.close()
+
+
+def http_get(url: str) -> tuple[int, http.client.HTTPMessage, bytes]:
+    """GET url on this thread's kept-alive connection to its host: (status, headers, body)."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise FetchError(f"not an https URL: {url}")
+    host = parsed.netloc
+    path = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+    for attempt in (1, 2):
+        conn = _connection(host)
+        reused = conn.sock is not None
         try:
-            with urllib.request.urlopen(request, timeout=IMAGE_TIMEOUT_S) as response:
-                data = response.read()
+            conn.request("GET", path, headers={"User-Agent": USER_AGENT})
+            response = conn.getresponse()
+            body = response.read()
+        except (OSError, http.client.HTTPException) as exc:
+            _drop_connection(host)
+            # The server may close an idle kept-alive connection: retry once on a fresh one.
+            stale = reused and isinstance(exc, (ConnectionError, http.client.HTTPException))
+            if attempt == 1 and stale:
+                continue
+            if isinstance(exc, http.client.HTTPException):
+                raise FetchError(f"{type(exc).__name__}: {exc}") from exc
+            raise
+        if response.will_close:
+            _drop_connection(host)
+        return response.status, response.headers, body
+    raise AssertionError("unreachable")
+
+
+class Throttle:
+    """Shared pause for all workers: one rate-limited request holds back every request."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._resume_at = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            delay = self._resume_at - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+    def back_off(self, seconds: float) -> None:
+        with self._lock:
+            self._resume_at = max(self._resume_at, time.monotonic() + seconds)
+
+
+_throttle = Throttle()
+
+
+def fetch_image(url: str) -> Image.Image:
+    """Download and decode a picture, following redirects and waiting out rate limits (HTTP 429)."""
+    redirects = 0
+    attempt = 1
+    while True:
+        _throttle.wait()
+        status, headers, data = http_get(url)
+        if status == 200:
             break
-        except urllib.error.HTTPError as exc:
-            if exc.code != 429 or attempt == IMAGE_RETRIES:
-                raise
-            retry_after = exc.headers.get("Retry-After", "")
-            wait = int(retry_after) if retry_after.isdigit() else 10 * attempt
-            logger.info("rate limited; retrying in %ds", wait)
-            time.sleep(wait)
+        if status in REDIRECT_STATUSES and headers.get("Location") and redirects < MAX_REDIRECTS:
+            url = urljoin(url, headers["Location"])
+            redirects += 1
+            continue
+        if status == 429 and attempt < IMAGE_RETRIES:
+            # Wikimedia says Retry-After: 1, which parallel workers quickly exhaust: back off
+            # exponentially (2, 4, ... 64 s), all workers together.
+            retry_after = headers.get("Retry-After", "")
+            wait = max(int(retry_after) if retry_after.isdigit() else 0, 2**attempt)
+            logger.info("rate limited; all workers pausing %ds", wait)
+            _throttle.back_off(wait)
+            attempt += 1
+            continue
+        raise FetchError(f"HTTP {status}")
     with Image.open(io.BytesIO(data)) as image:
         image.load()
         return image.copy()
 
 
-def download_images(html: str, folder: Path, window: int) -> None:
-    """Pixelate every picture of the article body into folder (see the module docstring).
-    Pictures already there are kept; failures are logged, and leave the folder incomplete."""
+def save_picture(url: str, width: int | None, target: Path, original: Path, window: int) -> bool:
+    """Fetch one picture and write its pixelated and unpixelated files; False if it failed."""
+    try:
+        image = fetch_image(url)
+        if not target.exists():
+            pixelate.pixel_blocks(image, window, width).save(target, format="PNG")
+        original_copy(image, width).save(
+            original, format="WEBP", quality=ORIGINAL_QUALITY, method=ORIGINAL_METHOD
+        )
+    except (OSError, UnidentifiedImageError, ValueError) as exc:
+        logger.warning("picture %s failed: %s", url, exc)
+        return False
+    return True
+
+
+def download_images(html: str, folder: Path, window: int, workers: int = DEFAULT_WORKERS) -> None:
+    """Pixelate every picture of the article body into folder (see the module docstring),
+    workers at a time. Pictures already there are kept; failures are logged, and leave the
+    folder incomplete."""
     body = BeautifulSoup(html, "html.parser").select_one(puzzle.BODY_SELECTOR)
     if body is None:
         raise RuntimeError(f"{puzzle.BODY_SELECTOR} not found; not an article page?")
     folder.mkdir(parents=True, exist_ok=True)
     (folder / COMPLETE).unlink(missing_ok=True)
     seen: set[str] = set()
-    failed = 0
+    jobs: list[tuple[str, int | None, Path, Path]] = []
     for img in body.find_all("img"):
         src = str(img.get("src") or "")
         if not src or src in seen:
@@ -191,30 +292,25 @@ def download_images(html: str, folder: Path, window: int) -> None:
         if urlparse(url).hostname in RESTRICTED_HOSTS:
             logger.info("skipping restricted picture %s", url)
             continue
-        width = _size(img.get("width"))
-        try:
-            image = fetch_image(url)
-            if not target.exists():
-                pixelate.pixel_blocks(image, window, width).save(target, format="PNG")
-            original_copy(image, width).save(original, format="WEBP", quality=ORIGINAL_QUALITY, method=6)
-        except (urllib.error.URLError, TimeoutError, OSError, UnidentifiedImageError, ValueError) as exc:
-            logger.warning("picture %s failed: %s", url, exc)
-            failed += 1
-        time.sleep(PAUSE_BETWEEN_IMAGES_S)
-    if failed:
+        jobs.append((url, _size(img.get("width")), target, original))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(lambda job: save_picture(*job, window), jobs))
+    if failed := results.count(False):
         raise RuntimeError(f"{failed} of {len(seen)} pictures failed; run again to retry them")
     (folder / COMPLETE).write_text(f"window {window}\n{ORIGINALS}\n", encoding="utf-8")
     logger.info("pixelated %d pictures into %s", len(seen), folder)
 
 
-def download(article: Article, output_dir: Path, render: bool, window: int, force: bool) -> None:
+def download(
+    article: Article, output_dir: Path, render: bool, window: int, force: bool, workers: int
+) -> None:
     page = output_dir / f"{article.slug}.html"
     if force or not page.exists():
         html = wikipage.download_html(article.url)
         page.write_text(html, encoding="utf-8")
     else:
         html = page.read_text(encoding="utf-8")
-    download_images(html, images_dir(output_dir, article.slug), window)
+    download_images(html, images_dir(output_dir, article.slug), window, workers)
     if not render:
         logger.info("saved %s.html", output_dir / article.slug)
         return
@@ -242,6 +338,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="pixelation block size in displayed pixels (default: 16, the game's finest; it makes"
         " coarser ones from these); delete <slug>.images/ to redo",
     )
+    parser.add_argument(
+        "--workers", type=int, default=DEFAULT_WORKERS,
+        help=f"pictures fetched and encoded in parallel (default: {DEFAULT_WORKERS})",
+    )
     parser.add_argument("--force", action="store_true", help="re-download articles that already exist")
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     return parser.parse_args(argv)
@@ -255,6 +355,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.window < 1:
         logger.error("--window must be at least 1")
+        return 1
+    if args.workers < 1:
+        logger.error("--workers must be at least 1")
         return 1
     try:
         articles = read_articles(args.articles, args.lang)
@@ -284,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
     for i, article in enumerate(todo, start=1):
         logger.info("[%d/%d] %s", i, len(todo), article.url)
         try:
-            download(article, output_dir, args.render, args.window, args.force)
+            download(article, output_dir, args.render, args.window, args.force, args.workers)
         except (PlaywrightError, RuntimeError, OSError, UnicodeDecodeError) as exc:
             logger.error("failed %s: %s", article.url, exc)
             failed.append(article.url)
