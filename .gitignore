@@ -11,3 +11,4 @@ public/game/
 playground.ipynb
 examine_pixelations/
 .DS_Store
+.shuffle_secret
