@@ -5,10 +5,9 @@ import { createPortal } from 'react-dom';
 import '@fontsource/fredoka/700.css';
 import { loadPuzzle, type Daily, type Puzzle } from './data/daily';
 import {
-  HINTS, NEVER, STEP_NAMES, STEPS, canHint, stepsOf, guessCount, isFound, isOver, isShown, loadDailyGame, markOf, newGame, normalizeTitle,
+  HINTS, NEVER, STEP_NAMES, STEPS, canHint, stepsOf, guessCount, isFound, isOver, isShown, loadDailyGame, marksOf, newGame, normalizeTitle,
   PICTURE_STEPS, partialTerms, pictureLevel, play, saveDailyGame, type Game, type Move, type Token,
 } from './game';
-import { type Mark } from './share';
 import { DEV_MODE } from './mode';
 import {
   isBoolean, isTextSize, isTheme, isWidth, useDark, useSetting, type TextSize, type Theme, type Width,
@@ -262,7 +261,7 @@ export default function App({ daily }: { daily: Daily }) {
   const shareLabel = copied === 'yes' ? 'Copied!' : copied === 'failed' ? "Couldn't copy" : 'Share';
 
   const share = () => {
-    const marks = game.moves.map((m) => markOf(m, puzzle.answer)).filter((m): m is Mark => m !== null);
+    const marks = marksOf(game, puzzle.answer);
     copyText(shareText(daily.day, marks, game.hints.length, siteUrl())).then(
       () => setCopied('yes'),
       (err) => {

@@ -132,7 +132,8 @@ const nextStep = (game: Game, rules: Rules) => stepsOf(rules).find((s) => s > ga
 
 /**
  * The game after one more move; null for a move that can't be made (game over, repeated guess, a part of the
- * title already found, no hint left...). A guess that is part of the title costs nothing: it shows those words.
+ * title already found, no hint left...). A guess that is part of the title costs nothing: it shows those words,
+ * and wins once every word of the title (stopwords aside) is found.
  */
 export function play(game: Game, move: Move, rules: Rules): Game | null {
   if (isOver(game)) return null;
@@ -154,7 +155,9 @@ export function play(game: Game, move: Move, rules: Rules): Game | null {
       if (partial) {
         const terms = partial.filter((t) => !game.found.includes(t));
         if (!terms.length) return null;
-        return { ...game, moves, found: [...game.found, ...terms], feedback: { kind: 'partial', title: move.title, terms } };
+        const found = [...game.found, ...terms];
+        if (termsOf(rules.answer).every((t) => found.includes(t))) return { ...game, moves, found, feedback: { kind: 'correct' } };
+        return { ...game, moves, found, feedback: { kind: 'partial', title: move.title, terms } };
       }
       return {
         ...game, moves, step: nextStep(game, rules), wrong: [...game.wrong, move.title],
@@ -164,19 +167,26 @@ export function play(game: Game, move: Move, rules: Rules): Game | null {
   }
 }
 
-/** One emoji per move, for sharing; hints have none (the share counts them). */
-export function markOf(move: Move, answer: string): Mark | null {
-  switch (move.kind) {
-    case 'give-up':
-      return MARKS.gaveUp;
-    case 'skip':
-      return MARKS.skipped;
-    case 'hint':
-      return null;
-    case 'guess':
-      if (normalizeTitle(move.title) === normalizeTitle(answer)) return MARKS.right;
-      return partialTerms(move.title, answer) ? MARKS.partial : MARKS.wrong;
-  }
+/** One emoji per move, for sharing; hints have none (the share counts them). A winning partial guess is right. */
+export function marksOf(game: Game, answer: string): Mark[] {
+  const marks: Mark[] = [];
+  game.moves.forEach((move, i) => {
+    const last = i === game.moves.length - 1;
+    switch (move.kind) {
+      case 'give-up':
+        marks.push(MARKS.gaveUp);
+        break;
+      case 'skip':
+        marks.push(MARKS.skipped);
+        break;
+      case 'hint':
+        break;
+      case 'guess':
+        if (last && game.feedback?.kind === 'correct') marks.push(MARKS.right);
+        else marks.push(partialTerms(move.title, answer) ? MARKS.partial : MARKS.wrong);
+    }
+  });
+  return marks;
 }
 
 // One saved game at a time: today's. Another day's or another puzzle's (a new deploy) is ignored.
