@@ -258,7 +258,10 @@ def save_picture(url: str, width: int | None, target: Path, original: Path, wind
     try:
         image = fetch_image(url)
         if not target.exists():
-            pixelate.pixel_blocks(image, window, width).save(target, format="PNG")
+            blocks = pixelate.pixel_blocks(image, window, width)
+            # A source's colour profile can exceed what Pillow reads back (MAX_TEXT_CHUNK).
+            blocks.info.pop("icc_profile", None)
+            blocks.save(target, format="PNG")
         original_copy(image, width).save(
             original, format="WEBP", quality=ORIGINAL_QUALITY, method=ORIGINAL_METHOD
         )
