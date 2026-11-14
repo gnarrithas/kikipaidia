@@ -78,3 +78,8 @@
  */
 :root[data-theme='dark'] .article,
 :root[data-theme='dark'] .article img { filter: invert(1) hue-rotate(180deg); }
+/* Inverted, the faint light tints above turn near black; deeper ones invert to visible dark tints. */
+:root[data-theme='dark'] .article g-w.revealed { background: #c4d9a0; }
+:root[data-theme='dark'] .article g-w.hinted { background: #ecd36a; }
+:root[data-theme='dark'] .article g-w.title-word { background: #a9c3f2; }
+:root[data-theme='dark'] .article.hinting g-w:not(.on):hover { background: #e0c040; }
